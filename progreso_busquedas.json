@@ -1,0 +1,32 @@
+{
+  "Profile 2": {
+    "completadas": 30,
+    "fecha": "2026-02-03 13:04:32",
+    "numero": 2
+  },
+  "Profile 4": {
+    "completadas": 30,
+    "fecha": "2026-02-03 13:04:44",
+    "numero": 3
+  },
+  "Profile 5": {
+    "completadas": 30,
+    "fecha": "2026-02-03 13:01:40",
+    "numero": 4
+  },
+  "Default": {
+    "completadas": 30,
+    "fecha": "2026-02-03 13:05:33",
+    "numero": 1
+  },
+  "Profile 6": {
+    "completadas": 30,
+    "fecha": "2026-02-03 13:03:00",
+    "numero": 5
+  },
+  "Profile 7": {
+    "completadas": 30,
+    "fecha": "2026-02-03 13:03:10",
+    "numero": 6
+  }
+}
