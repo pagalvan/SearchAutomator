@@ -18,6 +18,7 @@ from edge_search_automation import (
     procesar_perfil,
     generar_busquedas_realistas
 )
+from puntos_dashboard import registrar_puntos, abrir_dashboard
 
 # Archivo para guardar el progreso
 PROGRESO_FILE = "progreso_busquedas.json"
@@ -106,6 +107,16 @@ class PerfilCard(tk.Frame):
             fg='#0066cc'
         )
         self.email_label.pack(anchor=tk.W, pady=2)
+        
+        # Puntos Rewards
+        self.puntos_label = tk.Label(
+            info_frame,
+            text="💰 Puntos: --",
+            font=('Arial', 9, 'bold'),
+            bg='white',
+            fg='#f39c12'
+        )
+        self.puntos_label.pack(anchor=tk.W, pady=2)
         
         # Barra de progreso
         progress_frame = tk.Frame(main_frame, bg='white')
@@ -196,6 +207,9 @@ class PerfilCard(tk.Frame):
         except Exception as e:
             self.email_label.config(text="📧 Error al cargar")
         
+        # Cargar puntos guardados del historial
+        self._cargar_puntos_historial()
+        
         # Cargar progreso guardado
         self._cargar_progreso()
     
@@ -249,6 +263,38 @@ class PerfilCard(tk.Frame):
                 
                 with open(PROGRESO_FILE, 'w') as f:
                     json.dump(data, f, indent=2)
+        except Exception as e:
+            pass
+    
+    def _cargar_puntos_historial(self):
+        """Carga los últimos puntos guardados del historial"""
+        try:
+            historial_file = "historial_puntos.json"
+            if os.path.exists(historial_file):
+                with open(historial_file, 'r', encoding='utf-8') as f:
+                    historial = json.load(f)
+                    
+                    if self.nombre_perfil in historial:
+                        registros = historial[self.nombre_perfil].get('registros', [])
+                        if registros:
+                            # Obtener el último registro
+                            ultimo = registros[-1]
+                            puntos = ultimo.get('puntos', 0)
+                            if puntos:
+                                PUNTOS_PARA_CANJEAR = 6550
+                                if puntos >= PUNTOS_PARA_CANJEAR:
+                                    self.puntos_label.config(
+                                        text=f"🎁 ¡{puntos:,} LISTO!",
+                                        fg='#27ae60',
+                                        font=('Arial', 10, 'bold')
+                                    )
+                                else:
+                                    faltan = PUNTOS_PARA_CANJEAR - puntos
+                                    self.puntos_label.config(
+                                        text=f"💰 {puntos:,} (faltan {faltan:,})",
+                                        fg='#f39c12',
+                                        font=('Arial', 9)
+                                    )
         except Exception as e:
             pass
     
@@ -308,6 +354,34 @@ class PerfilCard(tk.Frame):
             self.estado_label.config(fg='orange')
         
         self._guardar_progreso()
+    
+    def set_puntos(self, puntos):
+        """Actualiza los puntos mostrados"""
+        if puntos:
+            try:
+                puntos_int = int(str(puntos).replace(',', '').replace('.', ''))
+                PUNTOS_PARA_CANJEAR = 6550
+                
+                if puntos_int >= PUNTOS_PARA_CANJEAR:
+                    # ¡Tiene suficientes puntos para canjear!
+                    self.puntos_label.config(
+                        text=f"🎁 ¡{puntos_int:,} LISTO!",
+                        fg='#27ae60',
+                        font=('Arial', 10, 'bold')
+                    )
+                else:
+                    faltan = PUNTOS_PARA_CANJEAR - puntos_int
+                    self.puntos_label.config(
+                        text=f"💰 {puntos_int:,} (faltan {faltan:,})",
+                        fg='#f39c12',
+                        font=('Arial', 9)
+                    )
+            except:
+                self.puntos_label.config(text=f"💰 Puntos: {puntos}")
+            
+            # Guardar en el historial
+            email = self.email_label.cget('text').replace('📧 ', '')
+            registrar_puntos(self.nombre_perfil, email, puntos)
     
     def set_estado(self, texto, color='gray'):
         """Establece el estado del perfil"""
@@ -434,6 +508,18 @@ class EdgeSearchGUI:
             bg='white'
         )
         self.label_seleccionados.pack(side=tk.RIGHT, padx=10)
+        
+        # Botón del dashboard
+        tk.Button(
+            toolbar,
+            text="📊 Dashboard",
+            command=self.abrir_dashboard,
+            bg='#1abc9c',
+            fg='white',
+            font=('Arial', 10, 'bold'),
+            padx=15,
+            pady=5
+        ).pack(side=tk.RIGHT, padx=5)
         
         # Botón de configuración de perfiles
         tk.Button(
@@ -891,12 +977,29 @@ class EdgeSearchGUI:
                 # No necesitamos retornar nada, detener_flag maneja la detención
                 return None
             
+            # Callback para información extra (puntos)
+            def actualizar_info(info):
+                if info.get('tipo') == 'puntos':
+                    puntos = info.get('valor')
+                    self.root.after(0, lambda: card.set_puntos(puntos))
+                    self.root.after(0, lambda: self.log(f"💰 {card.nombre_perfil}: {puntos} puntos"))
+            
             # Función para verificar detención (global o individual)
             def verificar_detener():
                 return self.detener_flag or card.detener_individual
             
+            # Obtener progreso actual para continuar desde donde quedó
+            progreso_actual = card.busquedas_completadas.get()
+            
             # Ejecutar con callback de progreso y flag de detención
-            completadas = procesar_perfil(card.nombre_perfil, card.numero, callback_progreso=actualizar_progreso, detener_flag=verificar_detener)
+            completadas = procesar_perfil(
+                card.nombre_perfil, 
+                card.numero, 
+                callback_progreso=actualizar_progreso, 
+                detener_flag=verificar_detener,
+                callback_info=actualizar_info,
+                busquedas_iniciales=progreso_actual
+            )
             
             # Verificar si se detuvo o se completó
             if self.detener_flag:
@@ -950,6 +1053,10 @@ class EdgeSearchGUI:
         self.log("\n" + "="*60)
         self.log("🎉 Proceso finalizado")
         self.log("="*60 + "\n")
+    
+    def abrir_dashboard(self):
+        """Abre la ventana del dashboard de puntos"""
+        abrir_dashboard(self.root)
     
     def recargar_aplicacion(self):
         """Recarga la aplicación con la nueva configuración"""

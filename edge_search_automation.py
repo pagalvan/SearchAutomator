@@ -326,7 +326,58 @@ def realizar_busqueda(driver, texto_busqueda):
         return False
 
 
-def procesar_perfil(nombre_perfil, numero_perfil, callback_progreso=None, detener_flag=None):
+
+def obtener_puntos_recompensa(driver, timeout=2):
+    """
+    Intenta obtener los puntos de Microsoft Rewards.
+    
+    Args:
+        driver: Instancia del WebDriver
+        timeout: Tiempo máximo de espera en segundos
+        
+    Returns:
+        str: Puntos encontrados o None
+    """
+    try:
+        # Método 1: ID directo 'id_rc' (el más común en Bing)
+        try:
+            # Usar find_elements primero para no esperar si no existe
+            if driver.find_elements(By.ID, "id_rc"):
+                elem = driver.find_element(By.ID, "id_rc")
+                if elem.is_displayed():
+                    texto = elem.text
+                    # A veces devuelve vacío si está cargando
+                    if texto and any(c.isdigit() for c in texto):
+                        return texto
+        except:
+            pass
+
+        # Método 2: Selectores CSS alternativos
+        try:
+            selectores = [
+                "#id_rc", 
+                "span[id='id_rc']", 
+                ".points-container", 
+                "a#id_rh div", # Contenedor dentro del enlace de rewards
+                "div[id='id_rc']"
+            ]
+            
+            for selector in selectores:
+                elementos = driver.find_elements(By.CSS_SELECTOR, selector)
+                for elem in elementos:
+                    if elem.is_displayed():
+                        texto = elem.text
+                        if texto and any(c.isdigit() for c in texto):
+                            return texto
+        except:
+            pass
+            
+        return None
+    except Exception:
+        return None
+
+
+def procesar_perfil(nombre_perfil, numero_perfil, callback_progreso=None, detener_flag=None, callback_info=None, busquedas_iniciales=0):
     """
     Procesa un perfil de Edge realizando las búsquedas programadas.
     
@@ -335,6 +386,8 @@ def procesar_perfil(nombre_perfil, numero_perfil, callback_progreso=None, detene
         numero_perfil (int): Número del perfil (para logging)
         callback_progreso (callable): Función a llamar después de cada búsqueda con el número completado
         detener_flag (callable): Función que retorna True si se debe detener
+        callback_info (callable): Función para reportar información extra (ej. puntos)
+        busquedas_iniciales (int): Número de búsquedas ya completadas (para continuar progreso)
     """
     print(f"\n{'='*70}")
     print(f"🚀 INICIANDO PERFIL #{numero_perfil}: {nombre_perfil}")
@@ -351,13 +404,27 @@ def procesar_perfil(nombre_perfil, numero_perfil, callback_progreso=None, detene
             # ========== MODO ORIGINAL: Usar perfil directamente ==========
             print("🔧 Usando perfil original directamente (modo trabajo/educativo)")
             print("⚠️  NOTA: Este perfil mantiene autenticación completa")
+            print("⚠️  IMPORTANTE: Asegúrate de que Edge NO esté abierto con este perfil")
             print(f"📁 Perfil: {os.path.join(USER_DATA_DIR, nombre_perfil)}\n")
             
             # Crear driver con el perfil original
             print("🔧 Configurando driver de Edge...")
             puerto_debug = 9222 + numero_perfil
-            driver = crear_driver_edge(nombre_perfil, headless=MODO_HEADLESS, puerto_debug=puerto_debug)
-            print("✅ Driver creado correctamente\n")
+            try:
+                driver = crear_driver_edge(nombre_perfil, headless=MODO_HEADLESS, puerto_debug=puerto_debug)
+                print("✅ Driver creado correctamente\n")
+            except Exception as e:
+                error_msg = str(e)
+                if "session not created" in error_msg or "Chrome instance exited" in error_msg:
+                    print(f"\n❌ ERROR: No se pudo iniciar Edge con el perfil '{nombre_perfil}'")
+                    print("   Posibles causas:")
+                    print("   1. Edge ya está abierto con este perfil - CIÉRRALO primero")
+                    print("   2. Otro proceso está usando el perfil")
+                    print("   3. El perfil está corrupto")
+                    print("\n   💡 SOLUCIÓN: Cierra todas las ventanas de Edge y vuelve a intentar")
+                    if callback_info:
+                        callback_info({'tipo': 'error', 'valor': 'Edge abierto con este perfil. Ciérralo primero.'})
+                raise
             
         else:
             # ========== MODO TEMPORAL: Copiar perfil a directorio temporal ==========
@@ -431,46 +498,73 @@ def procesar_perfil(nombre_perfil, numero_perfil, callback_progreso=None, detene
             # Intentar verificar si está logueado
             print("🔍 Verificando estado de sesión...")
             time.sleep(1)
+            
+            # Intentar obtener puntos
+            puntos = obtener_puntos_recompensa(driver)
+            if puntos:
+                print(f"💰 Puntos encontrados: {puntos}")
+                if callback_info:
+                    callback_info({'tipo': 'puntos', 'valor': puntos})
         except Exception:
             pass
         
+        # Calcular cuántas búsquedas faltan
+        busquedas_restantes = BUSQUEDAS_POR_PERFIL - busquedas_iniciales
+        
+        if busquedas_restantes <= 0:
+            print(f"✅ Este perfil ya completó las {BUSQUEDAS_POR_PERFIL} búsquedas hoy")
+            return BUSQUEDAS_POR_PERFIL
+        
         # Generar búsquedas
-        print(f"📝 Generando {BUSQUEDAS_POR_PERFIL} búsquedas realistas...")
-        busquedas = generar_busquedas_realistas(BUSQUEDAS_POR_PERFIL)
+        print(f"📝 Generando {busquedas_restantes} búsquedas realistas (continuando desde {busquedas_iniciales})...")
+        busquedas = generar_busquedas_realistas(busquedas_restantes)
         print("✅ Búsquedas generadas\n")
         
         # Realizar búsquedas
-        busquedas_completadas = 0
+        busquedas_completadas = busquedas_iniciales
+        puntos_detectados = False # Flag para saber si ya tenemos puntos
+        
         for i, busqueda in enumerate(busquedas, 1):
+            # Número real de búsqueda (considerando las ya hechas)
+            num_busqueda_real = busquedas_iniciales + i
             # Verificar si se debe detener
             if detener_flag and detener_flag():
-                print(f"\n⏹️ Búsquedas detenidas por usuario en {i-1}/{BUSQUEDAS_POR_PERFIL}")
-                busquedas_completadas = i - 1
+                print(f"\n⏹️ Búsquedas detenidas por usuario en {busquedas_completadas}/{BUSQUEDAS_POR_PERFIL}")
                 break
             
-            print(f"🔍 Búsqueda {i}/{BUSQUEDAS_POR_PERFIL}: '{busqueda}'")
+            print(f"🔍 Búsqueda {num_busqueda_real}/{BUSQUEDAS_POR_PERFIL}: '{busqueda}'")
             
             # Realizar la búsqueda
             exito = realizar_busqueda(driver, busqueda)
             
             if exito:
                 print(f"✅ Búsqueda completada")
-                busquedas_completadas = i
+                busquedas_completadas = num_busqueda_real
+                
+                # Intentar leer puntos si aún no se han detectado o actualizar cada 5 búsquedas
+                if not puntos_detectados or num_busqueda_real % 5 == 0:
+                    try:
+                        pts = obtener_puntos_recompensa(driver, timeout=1)
+                        if pts:
+                            puntos_detectados = True
+                            if callback_info:
+                                callback_info({'tipo': 'puntos', 'valor': pts})
+                    except:
+                        pass
             else:
                 print(f"⚠️  Búsqueda con errores")
-                busquedas_completadas = i  # Contar aunque tenga errores
+                busquedas_completadas = num_busqueda_real  # Contar aunque tenga errores
             
             # Llamar al callback de progreso si existe
             if callback_progreso:
-                continuar = callback_progreso(i)
+                continuar = callback_progreso(num_busqueda_real)
                 # Si el callback retorna False, detener
                 if continuar is False:
-                    print(f"\n⏹️ Detenido por callback en {i}/{BUSQUEDAS_POR_PERFIL}")
-                    busquedas_completadas = i
+                    print(f"\n⏹️ Detenido por callback en {num_busqueda_real}/{BUSQUEDAS_POR_PERFIL}")
                     break
             
             # Espera aleatoria antes de la siguiente búsqueda (excepto en la última)
-            if i < BUSQUEDAS_POR_PERFIL:
+            if num_busqueda_real < BUSQUEDAS_POR_PERFIL:
                 tiempo_espera = random.randint(TIEMPO_MIN, TIEMPO_MAX)
                 print(f"⏳ Esperando {tiempo_espera} segundos antes de la siguiente búsqueda...")
                 time.sleep(tiempo_espera)
